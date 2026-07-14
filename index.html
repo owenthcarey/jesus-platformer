@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#152d38" />
+    <meta
+      name="description"
+      content="The Way: A Gospel Adventure — a handcrafted Bible-based platform game built with Phaser."
+    />
+    <meta property="og:title" content="The Way — A Gospel Adventure" />
+    <meta property="og:description" content="Journey through Galilee in a story-driven Bible platformer." />
+    <title>The Way — A Gospel Adventure</title>
+  </head>
+  <body>
+    <main id="game-shell" aria-label="The Way: A Gospel Adventure">
+      <div id="game-container"></div>
+      <div id="orientation-hint" aria-hidden="true">↻&nbsp;&nbsp; Rotate to landscape for the best view</div>
+      <div id="loading-screen" role="status" aria-live="polite">
+        <div class="loading-mark">✦</div>
+        <p>Preparing the road…</p>
+        <div class="loading-track"><span id="loading-bar"></span></div>
+      </div>
+    </main>
+    <noscript>This game requires JavaScript to run.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
