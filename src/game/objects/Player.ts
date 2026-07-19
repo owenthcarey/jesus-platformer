@@ -4,6 +4,7 @@ import { AudioManager } from '../services/AudioManager';
 export interface VirtualControls {
   left: boolean;
   right: boolean;
+  jump: boolean;
 }
 
 export class Player extends Phaser.Physics.Arcade.Sprite {
@@ -11,7 +12,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private shadow: Phaser.GameObjects.Ellipse;
   private cursors: Phaser.Types.Input.Keyboard.CursorKeys;
   private keys: Record<'left' | 'right' | 'jump', Phaser.Input.Keyboard.Key>;
-  private virtual: VirtualControls = { left: false, right: false };
+  private virtual: VirtualControls = { left: false, right: false, jump: false };
   private lastGroundedAt = 0;
   private jumpQueuedAt = -1000;
   private wasGrounded = false;
@@ -130,7 +131,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       const jumpHeld = this.cursors.space.isDown
         || this.cursors.up.isDown
         || this.keys.jump.isDown
-        || gamepadJumpDown;
+        || gamepadJumpDown
+        || this.virtual.jump;
       if (!jumpHeld && body.velocity.y < -210) this.setVelocityY(body.velocity.y * 0.78);
     }
 

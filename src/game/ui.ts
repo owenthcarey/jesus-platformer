@@ -65,17 +65,17 @@ export function makeButton(
 
   const container = scene.add.container(x, y, [background, shine, text]);
   if (!disabled) {
-    background.setInteractive({ useHandCursor: true });
-    background.on('pointerover', () => {
+    container.setSize(width, height).setInteractive({ useHandCursor: true });
+    container.on('pointerover', () => {
       scene.tweens.add({ targets: container, scaleX: 1.025, scaleY: 1.025, duration: 120 });
       background.setFillStyle(primary ? 0xf2c66e : 0x1e4655, 1);
     });
-    background.on('pointerout', () => {
+    container.on('pointerout', () => {
       scene.tweens.add({ targets: container, scaleX: 1, scaleY: 1, duration: 150 });
       background.setFillStyle(fill, 0.96);
     });
-    background.on('pointerdown', () => container.setScale(0.985));
-    background.on('pointerup', () => {
+    container.on('pointerdown', () => container.setScale(0.985));
+    container.on('pointerup', () => {
       container.setScale(1);
       AudioManager.play('select');
       onClick();

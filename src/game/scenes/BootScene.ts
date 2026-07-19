@@ -14,6 +14,10 @@ export class BootScene extends Phaser.Scene {
     this.load.image('olive-tree', `${base}assets/art/galilee-olive-v2.png`);
     this.load.image('fishermen', `${base}assets/art/peter-and-andrew.png`);
     this.load.image('fishing-boat', `${base}assets/art/galilee-fishing-boat.png`);
+    this.load.spritesheet('galilee-props', `${base}assets/art/galilee-props.png`, {
+      frameWidth: 627,
+      frameHeight: 627,
+    });
 
     const loadingBar = document.querySelector<HTMLElement>('#loading-bar');
     this.load.on('progress', (progress: number) => {

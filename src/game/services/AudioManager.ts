@@ -36,6 +36,7 @@ export class AudioManager {
   private static outputGain?: GainNode;
   private static compressor?: DynamicsCompressorNode;
   private static noiseBuffer?: AudioBuffer;
+  private static journeyProgress = 0;
 
   static unlock(): void {
     if (!this.context) {
@@ -71,6 +72,18 @@ export class AudioManager {
     if (this.enabled) this.unlock();
   }
 
+  static setJourneyProgress(progress: number): void {
+    const next = Math.max(0, Math.min(1, progress));
+    if (Math.abs(next - this.journeyProgress) < 0.015) return;
+    this.journeyProgress = next;
+    const ctx = this.context;
+    if (!ctx || !this.ambienceGain || !this.ambienceSecondaryGain) return;
+    const now = ctx.currentTime;
+    const shoreBlend = Math.max(0, Math.min(1, (next - 0.58) / 0.34));
+    this.ambienceGain.gain.setTargetAtTime(0.014 - shoreBlend * 0.004, now, 0.65);
+    this.ambienceSecondaryGain.gain.setTargetAtTime(0.006 + shoreBlend * 0.015, now, 0.65);
+  }
+
   private static startAmbience(): void {
     const ctx = this.context;
     if (!ctx || this.ambienceSource || !this.enabled || !this.ambienceRequested) return;
@@ -96,11 +109,12 @@ export class AudioManager {
     windFilter.type = 'lowpass';
     windFilter.frequency.value = 680;
     windFilter.Q.value = 0.35;
-    windGain.gain.value = 0.014;
+    const shoreBlend = Math.max(0, Math.min(1, (this.journeyProgress - 0.58) / 0.34));
+    windGain.gain.value = 0.014 - shoreBlend * 0.004;
     waterFilter.type = 'bandpass';
     waterFilter.frequency.value = 185;
     waterFilter.Q.value = 0.48;
-    waterGain.gain.value = 0.008;
+    waterGain.gain.value = 0.006 + shoreBlend * 0.015;
     lfo.type = 'sine';
     lfo.frequency.value = 0.11;
     lfoGain.gain.value = 0.0035;

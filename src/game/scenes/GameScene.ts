@@ -19,6 +19,7 @@ interface DialogueState {
 interface MovingPlatform extends Phaser.Physics.Arcade.Image {
   travelMin: number;
   travelMax: number;
+  signal: Phaser.GameObjects.Arc;
 }
 
 const WORLD_HEIGHT = 820;
@@ -51,7 +52,7 @@ export class GameScene extends Phaser.Scene {
   private hud!: Phaser.GameObjects.Container;
   private atmosphereTint!: Phaser.GameObjects.Rectangle;
   private spawnPoint = new Phaser.Math.Vector2(180, 560);
-  private virtualControls: VirtualControls = { left: false, right: false };
+  private virtualControls: VirtualControls = { left: false, right: false, jump: false };
   private collectedLights = 0;
   private scripturesFound: string[] = [];
   private health = 3;
@@ -68,6 +69,7 @@ export class GameScene extends Phaser.Scene {
   private isPaused = false;
   private isComplete = false;
   private pauseOverlay?: Phaser.GameObjects.Container;
+  private pauseActions: Phaser.GameObjects.Container[] = [];
   private touchControls?: Phaser.GameObjects.Container;
   private controlHint?: Phaser.GameObjects.Container;
   private toastTween?: Phaser.Tweens.Tween;
@@ -85,6 +87,11 @@ export class GameScene extends Phaser.Scene {
   private pausedDuration = 0;
   private gamepadInteractWasDown = false;
   private gamepadPauseWasDown = false;
+  private lastLightCollectedAt = -10000;
+  private lightCombo = 0;
+  private dialogueTypingEvent?: Phaser.Time.TimerEvent;
+  private dialogueFullText = '';
+  private reducedMotion = false;
 
   constructor() {
     super('Game');
@@ -94,7 +101,7 @@ export class GameScene extends Phaser.Scene {
     const requested = data.level ?? 1;
     this.level = LEVELS.find((entry) => entry.id === requested && entry.playable) ?? LEVELS[0];
     this.spawnPoint.set(180, 560);
-    this.virtualControls = { left: false, right: false };
+    this.virtualControls = { left: false, right: false, jump: false };
     this.collectedLights = 0;
     this.scripturesFound = [];
     this.health = 3;
@@ -107,6 +114,7 @@ export class GameScene extends Phaser.Scene {
     this.dialogue = undefined;
     this.dialogueBox = undefined;
     this.pauseOverlay = undefined;
+    this.pauseActions = [];
     this.touchControls = undefined;
     this.controlHint = undefined;
     this.toastTween = undefined;
@@ -126,9 +134,15 @@ export class GameScene extends Phaser.Scene {
     this.pausedDuration = 0;
     this.gamepadInteractWasDown = false;
     this.gamepadPauseWasDown = false;
+    this.lastLightCollectedAt = -10000;
+    this.lightCombo = 0;
+    this.dialogueTypingEvent = undefined;
+    this.dialogueFullText = '';
+    this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
   create(): void {
+    AudioManager.setJourneyProgress(0);
     AudioManager.setAmbience(true);
     this.physics.world.setBounds(0, 0, this.level.worldWidth, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, this.level.worldWidth, 720);
@@ -139,11 +153,23 @@ export class GameScene extends Phaser.Scene {
 
     this.player = new Player(this, this.spawnPoint.x, this.spawnPoint.y);
     this.player.setVirtualControls(this.virtualControls);
-    this.physics.add.collider(this.player, this.ground);
-    this.physics.add.collider(this.player, this.movingPlatforms);
+    this.physics.add.collider(
+      this.player,
+      this.ground,
+      undefined,
+      (_, platform) => this.canLandOn(platform as Phaser.Physics.Arcade.Image),
+    );
+    this.physics.add.collider(
+      this.player,
+      this.movingPlatforms,
+      undefined,
+      (_, platform) => this.canLandOn(platform as Phaser.Physics.Arcade.Image),
+    );
     this.physics.add.overlap(this.player, this.lightCollectibles, (_, light) => this.collectLight(light as Phaser.Physics.Arcade.Image));
     this.physics.add.overlap(this.player, this.scrolls, (_, scroll) => this.collectScroll(scroll as Phaser.Physics.Arcade.Image));
-    this.physics.add.overlap(this.player, this.hazards, () => this.takeDamage());
+    this.physics.add.overlap(this.player, this.hazards, (_, hazard) => {
+      this.takeDamage(hazard as Phaser.Physics.Arcade.Image);
+    });
     this.physics.add.overlap(this.player, this.checkpoints, (_, checkpoint) => {
       this.activateCheckpoint(checkpoint as Phaser.Physics.Arcade.Image);
     });
@@ -249,6 +275,20 @@ export class GameScene extends Phaser.Scene {
     };
     makeFlock(420, 205, 0.72, 54000);
     makeFlock(3320, 250, 0.48, 67000);
+
+    // Sparse pollen in world space makes the route feel alive without
+    // competing with the collectible silhouette.
+    this.add.particles(0, 0, 'mote', {
+      x: { min: 120, max: this.level.worldWidth - 120 },
+      y: { min: 405, max: 590 },
+      lifespan: { min: 2600, max: 4400 },
+      speedX: { min: 7, max: 18 },
+      speedY: { min: -11, max: -3 },
+      scale: { start: 0.22, end: 0 },
+      alpha: { start: 0.2, end: 0 },
+      frequency: this.reducedMotion ? 920 : 480,
+      blendMode: Phaser.BlendModes.ADD,
+    }).setDepth(14);
   }
 
   private createScenery(): void {
@@ -296,7 +336,62 @@ export class GameScene extends Phaser.Scene {
       letterSpacing: 4,
     }).setAlpha(0.58).setOrigin(0.5).setDepth(-4);
 
+    this.createLandmarkProps();
+    this.createWindStreaks();
     this.createGroundDetails();
+  }
+
+  private createLandmarkProps(): void {
+    const props = [
+      { x: 1345, y: GROUND_TOP + 3, frame: 0, size: 284, depth: 4, flip: false, alpha: 0.92 },
+      { x: 2385, y: GROUND_TOP + 5, frame: 1, size: 214, depth: 8, flip: false, alpha: 0.96 },
+      { x: 3275, y: GROUND_TOP + 3, frame: 3, size: 164, depth: 4, flip: true, alpha: 0.72 },
+      { x: 4525, y: GROUND_TOP + 5, frame: 2, size: 205, depth: 8, flip: false, alpha: 0.94 },
+      { x: 5350, y: GROUND_TOP + 4, frame: 3, size: 196, depth: 4, flip: false, alpha: 0.76 },
+      { x: 6890, y: GROUND_TOP + 6, frame: 3, size: 178, depth: 8, flip: true, alpha: 0.82 },
+      { x: 7288, y: GROUND_TOP + 6, frame: 1, size: 196, depth: 8, flip: true, alpha: 0.9 },
+    ] as const;
+
+    props.forEach(({ x, y, frame, size, depth, flip, alpha }) => {
+      this.add.image(x, y, 'galilee-props', frame)
+        .setOrigin(0.5, 0.85)
+        .setDisplaySize(size, size)
+        .setFlipX(flip)
+        .setAlpha(alpha)
+        .setDepth(depth);
+    });
+  }
+
+  private createWindStreaks(): void {
+    if (this.reducedMotion) return;
+    [
+      { x: 650, y: 292, width: 92, delay: 0 },
+      { x: 2460, y: 326, width: 126, delay: 1800 },
+      { x: 3980, y: 278, width: 104, delay: 900 },
+      { x: 5740, y: 318, width: 138, delay: 2600 },
+    ].forEach(({ x, y, width, delay }, index) => {
+      const breeze = this.add.graphics().setDepth(-2).setAlpha(0);
+      breeze.lineStyle(1.5, 0xffefc4, 0.34);
+      breeze.beginPath();
+      breeze.moveTo(0, 0);
+      breeze.lineTo(width, index % 2 === 0 ? -4 : 4);
+      breeze.strokePath();
+      breeze.lineStyle(1, 0xffefc4, 0.2);
+      breeze.lineBetween(width * 0.24, 9, width * 0.76, 7);
+      breeze.setPosition(x, y);
+      this.tweens.add({
+        targets: breeze,
+        x: x + 180,
+        alpha: { from: 0, to: 0.5 },
+        duration: 2500,
+        delay,
+        hold: 180,
+        yoyo: true,
+        repeat: -1,
+        repeatDelay: 5200 + index * 700,
+        ease: 'Sine.InOut',
+      });
+    });
   }
 
   private createForegroundLayer(): void {
@@ -403,6 +498,18 @@ export class GameScene extends Phaser.Scene {
       thorn.refreshBody();
       const body = thorn.body as Phaser.Physics.Arcade.StaticBody;
       body.setSize(thorn.displayWidth * 0.72, thorn.displayHeight * 0.58, true);
+      const warning = this.add.ellipse(x, GROUND_TOP - 3, thorn.displayWidth * 0.82, 12, 0x411f18, 0.18)
+        .setStrokeStyle(1, 0xd88a4a, 0.18)
+        .setDepth(8);
+      this.tweens.add({
+        targets: warning,
+        alpha: { from: 0.2, to: 0.48 },
+        scaleX: 1.08,
+        duration: 1050 + (index % 3) * 140,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.InOut',
+      });
     });
 
     const lightPositions = [
@@ -512,17 +619,53 @@ export class GameScene extends Phaser.Scene {
     const startX = x - width / 2;
     for (let index = 0; index < segments; index += 1) {
       const platform = this.ground.create(startX + segmentWidth * (index + 0.5), y, 'terrain') as Phaser.Physics.Arcade.Image;
-      platform.setDisplaySize(segmentWidth + (segments > 1 ? 56 : 0), height).setDepth(5).refreshBody();
+      platform
+        .setDisplaySize(segmentWidth + (segments > 1 ? 56 : 0), height)
+        .setData('oneWay', y < 620)
+        .setDepth(5)
+        .refreshBody();
     }
   }
 
   private addMovingPlatform(x: number, y: number, width: number, min: number, max: number, velocity: number): void {
+    const rail = this.add.graphics().setDepth(4);
+    rail.lineStyle(2, 0xf2cd80, 0.16);
+    rail.lineBetween(min, y + 3, max, y + 3);
+    rail.fillStyle(0xf7d98c, 0.34);
+    rail.fillCircle(min, y + 3, 3);
+    rail.fillCircle(max, y + 3, 3);
+    const signal = this.add.circle(x, y - 28, 5, 0xffdf89, 0.82)
+      .setStrokeStyle(2, 0x704927, 0.55)
+      .setDepth(7);
+    this.tweens.add({
+      targets: signal,
+      scale: 1.32,
+      alpha: 0.48,
+      duration: 720,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.InOut',
+    });
     const platform = this.movingPlatforms.create(x, y, 'terrain') as MovingPlatform;
-    platform.setDisplaySize(width, 56).setDepth(6).setVelocityX(velocity).setImmovable(true);
+    platform
+      .setDisplaySize(width, 56)
+      .setData('oneWay', true)
+      .setDepth(6)
+      .setVelocityX(velocity)
+      .setImmovable(true);
     const body = platform.body as Phaser.Physics.Arcade.Body;
     body.setAllowGravity(false);
     platform.travelMin = min;
     platform.travelMax = max;
+    platform.signal = signal;
+  }
+
+  private canLandOn(platform: Phaser.Physics.Arcade.Image): boolean {
+    if (!platform.getData('oneWay')) return true;
+    const playerBody = this.player.body as Phaser.Physics.Arcade.Body;
+    const platformBody = platform.body as Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody;
+    const previousBottom = playerBody.prev.y + playerBody.height;
+    return playerBody.velocity.y >= 0 && previousBottom <= platformBody.top + 12;
   }
 
   private addLight(x: number, y: number, index: number): void {
@@ -675,6 +818,15 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1200)
       .setVisible(false);
+    this.tweens.add({
+      targets: key,
+      scaleX: 1.06,
+      scaleY: 1.06,
+      duration: 680,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.InOut',
+    });
   }
 
   private createTouchControls(): void {
@@ -713,7 +865,16 @@ export class GameScene extends Phaser.Scene {
 
     makeControl(74, 644, '‹', () => { this.virtualControls.left = true; }, () => { this.virtualControls.left = false; });
     makeControl(170, 644, '›', () => { this.virtualControls.right = true; }, () => { this.virtualControls.right = false; });
-    makeControl(1196, 638, '↑', () => this.player.queueJump(), () => undefined);
+    makeControl(
+      1196,
+      638,
+      '↑',
+      () => {
+        this.virtualControls.jump = true;
+        this.player.queueJump();
+      },
+      () => { this.virtualControls.jump = false; },
+    );
     makeControl(1096, 660, 'E', () => this.attemptInteract(), () => undefined);
     this.touchControls = this.add.container(0, 0, elements)
       .setScrollFactor(0)
@@ -745,6 +906,12 @@ export class GameScene extends Phaser.Scene {
       if (this.time.now <= this.interactionLockUntil || this.isPaused) return;
       this.attemptInteract();
     });
+    const continueDialogue = (): void => {
+      if (!this.dialogue || this.time.now <= this.interactionLockUntil || this.isPaused) return;
+      this.advanceDialogue();
+    };
+    this.input.keyboard!.on('keydown-SPACE', continueDialogue);
+    this.input.keyboard!.on('keydown-ENTER', continueDialogue);
     this.input.keyboard!.on('keydown-ESC', () => {
       if (this.isComplete || this.dialogue || this.isIntro || this.isCinematic || this.isRespawning) return;
       this.togglePause();
@@ -844,8 +1011,10 @@ export class GameScene extends Phaser.Scene {
     }
     light.disableBody(true, true);
     this.collectedLights += 1;
+    this.lightCombo = this.time.now - this.lastLightCollectedAt <= 5200 ? this.lightCombo + 1 : 1;
+    this.lastLightCollectedAt = this.time.now;
     AudioManager.play('collect');
-    this.cameras.main.flash(90, 255, 222, 137, false);
+    if (!this.reducedMotion) this.cameras.main.flash(90, 255, 222, 137, false);
     this.lightText.setText(`✦  ${String(this.collectedLights).padStart(2, '0')} / ${TOTAL_LIGHTS}`);
     this.tweens.add({ targets: this.lightText, scaleX: 1.08, scaleY: 1.08, duration: 90, yoyo: true, ease: 'Sine.Out' });
 
@@ -874,9 +1043,34 @@ export class GameScene extends Phaser.Scene {
       ease: 'Cubic.In',
       onComplete: () => hudSpark.destroy(),
     });
+    if (this.lightCombo >= 3 && this.collectedLights < TOTAL_LIGHTS) {
+      this.showLightTrail(this.lightCombo, collectedX, collectedY);
+    }
     if (this.collectedLights === TOTAL_LIGHTS) {
       this.showToast('EVERY LIGHT FOUND', 'A complete path of light');
     }
+  }
+
+  private showLightTrail(combo: number, worldX: number, worldY: number): void {
+    const label = this.add.text(worldX, worldY - 34, `PATH OF LIGHT  ×${combo}`, {
+      fontFamily: FONT_BODY,
+      fontSize: '10px',
+      fontStyle: '700',
+      color: '#fff0b0',
+      backgroundColor: '#102932cc',
+      padding: { x: 9, y: 5 },
+      letterSpacing: 1.2,
+    }).setOrigin(0.5).setDepth(60).setAlpha(0);
+    this.tweens.add({
+      targets: label,
+      y: worldY - 58,
+      alpha: 1,
+      duration: 220,
+      hold: 520,
+      yoyo: true,
+      ease: 'Cubic.Out',
+      onComplete: () => label.destroy(),
+    });
   }
 
   private collectScroll(scroll: Phaser.Physics.Arcade.Image): void {
@@ -915,6 +1109,7 @@ export class GameScene extends Phaser.Scene {
       const platform = child as MovingPlatform;
       if (platform.x <= platform.travelMin && platform.body!.velocity.x < 0) platform.setVelocityX(Math.abs(platform.body!.velocity.x));
       if (platform.x >= platform.travelMax && platform.body!.velocity.x > 0) platform.setVelocityX(-Math.abs(platform.body!.velocity.x));
+      platform.signal.setPosition(platform.x, platform.y - 28);
     });
   }
 
@@ -923,6 +1118,7 @@ export class GameScene extends Phaser.Scene {
     this.progressFill.setDisplaySize(Math.max(4, 440 * progress), 4);
     this.progressMarker.setX(410 + 440 * progress);
     this.atmosphereTint.setAlpha(Phaser.Math.Clamp((progress - 0.68) * 0.15, 0, 0.045));
+    AudioManager.setJourneyProgress(progress);
 
     let nextObjective = 'FOLLOW THE ROAD TO THE SHORE';
     if (this.player.x > 6600) nextObjective = 'SPEAK WITH PETER AND ANDREW';
@@ -975,6 +1171,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showRegionTitle(title: string, subtitle: string): void {
+    if (this.activeToast) {
+      this.time.delayedCall(2450, () => {
+        if (!this.isComplete && !this.isCinematic) this.showRegionTitle(title, subtitle);
+      });
+      return;
+    }
     this.regionTween?.stop();
     this.regionCard?.destroy(true);
     this.regionTween = undefined;
@@ -1022,6 +1224,7 @@ export class GameScene extends Phaser.Scene {
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const grounded = body.blocked.down || body.touching.down;
     if (this.player.consumeLanding() && body.velocity.y >= 0) {
+      if (!this.reducedMotion) this.cameras.main.shake(70, 0.0014);
       for (let index = 0; index < 5; index += 1) {
         const puff = this.add.image(this.player.x + Phaser.Math.Between(-14, 14), this.player.y - 2, 'mote')
           .setTint(0xcaa56f)
@@ -1055,7 +1258,11 @@ export class GameScene extends Phaser.Scene {
       if (this.time.now > this.interactionLockUntil) this.advanceDialogue();
       return;
     }
-    if (Math.abs(this.player.x - this.goalX) >= 165 || this.isComplete) return;
+    if (
+      Math.abs(this.player.x - this.goalX) >= 165
+      || Math.abs(this.player.y - GROUND_TOP) >= 150
+      || this.isComplete
+    ) return;
     this.beginGoalSequence();
   }
 
@@ -1121,7 +1328,7 @@ export class GameScene extends Phaser.Scene {
       wordWrap: { width: 950 },
       lineSpacing: 8,
     });
-    const hint = this.add.text(1165, 644, 'E / TAP  TO CONTINUE', {
+    const hint = this.add.text(1165, 644, 'E / SPACE / TAP  TO CONTINUE', {
       fontFamily: FONT_BODY,
       fontSize: '10px',
       fontStyle: '700',
@@ -1142,22 +1349,37 @@ export class GameScene extends Phaser.Scene {
   private renderDialogueLine(): void {
     if (!this.dialogue || !this.dialogueSpeaker || !this.dialogueText) return;
     const line = this.dialogue.lines[this.dialogue.index];
+    this.dialogueTypingEvent?.remove(false);
+    this.dialogueTypingEvent = undefined;
+    this.dialogueFullText = line.text;
     this.dialogueSpeaker.setText(line.speaker.toUpperCase());
-    this.dialogueText.setText(line.text);
+    this.dialogueText.setText('');
     this.dialogueSpeaker.setAlpha(0);
-    this.dialogueText.setAlpha(0).setY(566);
+    this.dialogueText.setAlpha(1).setY(558);
     this.tweens.add({ targets: this.dialogueSpeaker, alpha: 1, duration: 180, ease: 'Sine.Out' });
-    this.tweens.add({
-      targets: this.dialogueText,
-      alpha: 1,
-      y: 558,
-      duration: 260,
-      ease: 'Cubic.Out',
+    const characters = Array.from(line.text);
+    let characterIndex = 0;
+    this.dialogueTypingEvent = this.time.addEvent({
+      delay: this.reducedMotion ? 4 : 17,
+      repeat: Math.max(0, characters.length - 1),
+      callback: () => {
+        characterIndex += 1;
+        this.dialogueText?.setText(characters.slice(0, characterIndex).join(''));
+        if (characterIndex >= characters.length) this.dialogueTypingEvent = undefined;
+      },
+      callbackScope: this,
     });
   }
 
   private advanceDialogue(): void {
     if (!this.dialogue) return;
+    if (this.dialogueTypingEvent) {
+      this.dialogueTypingEvent.remove(false);
+      this.dialogueTypingEvent = undefined;
+      this.dialogueText?.setText(this.dialogueFullText);
+      this.interactionLockUntil = this.time.now + 90;
+      return;
+    }
     this.dialogue.index += 1;
     this.interactionLockUntil = this.time.now + 180;
     if (this.dialogue.index < this.dialogue.lines.length) {
@@ -1187,7 +1409,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private takeDamage(): void {
+  private takeDamage(source?: Phaser.Physics.Arcade.Image): void {
     if (
       this.time.now < this.invulnerableUntil
       || this.isComplete
@@ -1200,14 +1422,28 @@ export class GameScene extends Phaser.Scene {
     this.deaths += 1;
     AudioManager.play('hurt');
     this.player.flashDamage();
-    this.cameras.main.shake(190, 0.012);
-    this.cameras.main.flash(160, 110, 25, 18, false);
+    if (!this.reducedMotion) {
+      this.cameras.main.shake(190, 0.012);
+      this.cameras.main.flash(160, 110, 25, 18, false);
+    }
+    if (source) {
+      source.setTint(0xffa46d);
+      this.time.delayedCall(210, () => {
+        if (source.active) source.clearTint();
+      });
+    }
     if (this.health <= 0) {
       this.health = 3;
       this.showToast('TAKE COURAGE', 'The road continues from your last rest');
     }
     this.updateCourageHUD();
-    this.respawn(true);
+    if (source) {
+      this.player.setControlEnabled(false);
+      this.player.setVelocity(-this.player.getFacing() * 215, -285);
+      this.time.delayedCall(170, () => this.respawn(true));
+    } else {
+      this.respawn(true);
+    }
   }
 
   private updateCourageHUD(): void {
@@ -1222,7 +1458,11 @@ export class GameScene extends Phaser.Scene {
     this.player.setControlEnabled(false);
     this.player.setFrozen(false);
     this.player.setVelocity(0, 0);
-    if (!fromDamage) this.showToast('RETURNED TO THE PATH', 'Last checkpoint restored');
+    if (!fromDamage) {
+      this.health = 3;
+      this.updateCourageHUD();
+      this.showToast('RETURNED TO THE PATH', 'Last checkpoint restored · courage renewed');
+    }
     this.goalPrompt.setVisible(false);
     this.cameras.main.fadeOut(190, 11, 25, 32);
     this.time.delayedCall(200, () => {
@@ -1297,6 +1537,8 @@ export class GameScene extends Phaser.Scene {
       this.touchControls?.setVisible(true);
       this.pauseOverlay?.destroy(true);
       this.pauseOverlay = undefined;
+      this.pauseActions.forEach((action) => action.destroy(true));
+      this.pauseActions = [];
       return;
     }
 
@@ -1337,6 +1579,8 @@ export class GameScene extends Phaser.Scene {
       this.isPaused = false;
       this.pauseOverlay?.destroy(true);
       this.pauseOverlay = undefined;
+      this.pauseActions.forEach((action) => action.destroy(true));
+      this.pauseActions = [];
       this.player.setControlEnabled(true);
       this.touchControls?.setVisible(true);
       this.respawn(false);
@@ -1352,9 +1596,11 @@ export class GameScene extends Phaser.Scene {
       color: '#8f937f',
       letterSpacing: 1.3,
     }).setOrigin(0.5);
-    this.pauseOverlay = this.add.container(0, 0, [shade, panel, title, verse, journeyStats, resume, restart, exit, controls])
+    this.pauseOverlay = this.add.container(0, 0, [shade, panel, title, verse, journeyStats, controls])
       .setScrollFactor(0)
       .setDepth(3000);
+    this.pauseActions = [resume, restart, exit];
+    this.pauseActions.forEach((action) => action.setScrollFactor(0).setDepth(3001));
   }
 
   private completeLevel(): void {
@@ -1365,9 +1611,9 @@ export class GameScene extends Phaser.Scene {
     this.physics.pause();
     AudioManager.play('complete');
     const elapsed = Math.max(1000, this.time.now - this.startedAt - this.pausedDuration);
-    let rating = 1;
-    if (this.scripturesFound.length === SCRIPTURES.length) rating += 1;
-    if (this.collectedLights >= 10 && this.deaths <= 2) rating += 1;
+    const foundEveryScripture = this.scripturesFound.length === SCRIPTURES.length;
+    const walkedWithCare = this.collectedLights >= 10 && this.deaths <= 2;
+    const rating = 1 + Number(foundEveryScripture) + Number(walkedWithCare);
     const previousBest = SaveManager.load().bestTimes[this.level.id];
     const isNewBest = previousBest === undefined || elapsed < previousBest;
     SaveManager.completeLevel(this.level.id, elapsed, rating, this.scripturesFound);
@@ -1392,7 +1638,14 @@ export class GameScene extends Phaser.Scene {
       color: '#f2ca70',
       letterSpacing: 12,
     }).setOrigin(0.5);
-    const distinction = this.add.text(640, 246, rating === 3 ? 'A ROAD WALKED WITH CARE' : rating === 2 ? 'THE WORD DISCOVERED' : 'THE CALL ANSWERED', {
+    const distinctionLabel = rating === 3
+      ? 'A ROAD WALKED WITH CARE'
+      : foundEveryScripture
+        ? 'THE WORD DISCOVERED'
+        : walkedWithCare
+          ? 'A STEADY PILGRIMAGE'
+          : 'THE CALL ANSWERED';
+    const distinction = this.add.text(640, 246, distinctionLabel, {
       fontFamily: FONT_BODY,
       fontSize: '10px',
       fontStyle: '700',
@@ -1436,11 +1689,14 @@ export class GameScene extends Phaser.Scene {
       color: '#9ea18f',
       letterSpacing: 2,
     }).setOrigin(0.5);
-    const completionCard = this.add.container(0, 16, [shade, panel, eyebrow, title, stars, distinction, mastery, stats, verse, select, replay, next])
+    select.setScrollFactor(0).setDepth(4001).setAlpha(0);
+    replay.setScrollFactor(0).setDepth(4001).setAlpha(0);
+    const completionCard = this.add.container(0, 16, [shade, panel, eyebrow, title, stars, distinction, mastery, stats, verse, next])
       .setScrollFactor(0)
       .setDepth(4000)
       .setAlpha(0);
     this.tweens.add({ targets: completionCard, y: 0, alpha: 1, duration: 520, ease: 'Cubic.Out' });
+    this.tweens.add({ targets: [select, replay], alpha: 1, duration: 520, ease: 'Cubic.Out' });
 
     const celebration = this.add.particles(0, 0, 'mote', {
       x: { min: 250, max: 1030 },
@@ -1454,7 +1710,7 @@ export class GameScene extends Phaser.Scene {
       quantity: 1,
       tint: [0xffe3a0, 0xe8b75c, 0xfff4d6],
       blendMode: Phaser.BlendModes.ADD,
-    }).setScrollFactor(0).setDepth(4001);
+    }).setScrollFactor(0).setDepth(4002);
     this.time.delayedCall(4200, () => {
       celebration.stop();
       this.time.delayedCall(3100, () => celebration.destroy());
