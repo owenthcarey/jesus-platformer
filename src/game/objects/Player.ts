@@ -29,6 +29,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private lastStrideFrameAt = 0;
   private strideFrame = 1;
   private gamepadJumpWasDown = false;
+  private forceGroundedPresentation = false;
   private readonly physicsScale = 0.137;
   private readonly visualScale = 0.245;
 
@@ -91,7 +92,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   update(time: number): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
-    const grounded = body.blocked.down || body.touching.down;
+    const grounded = this.forceGroundedPresentation || body.blocked.down || body.touching.down;
     const gamepad = this.scene.input.gamepad?.getPad(0);
     const gamepadJumpDown = gamepad?.buttons[0]?.pressed ?? false;
     this.landedThisFrame = false;
@@ -230,6 +231,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return this.facing;
   }
 
+  face(direction: number): void {
+    this.facing = direction < 0 ? -1 : 1;
+    this.visual.setFlipX(this.facing < 0);
+  }
+
   consumeLanding(): boolean {
     const landed = this.landedThisFrame;
     this.landedThisFrame = false;
@@ -246,8 +252,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.shadow.setPosition(this.x, this.y + 2);
   }
 
-  setFrozen(frozen: boolean): void {
+  setFrozen(frozen: boolean, groundedPresentation = false): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
+    this.forceGroundedPresentation = frozen && (groundedPresentation || this.forceGroundedPresentation);
     body.setAllowGravity(!frozen);
     if (frozen) {
       this.setVelocity(0, 0);

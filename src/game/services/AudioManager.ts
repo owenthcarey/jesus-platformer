@@ -8,6 +8,7 @@ type SoundName =
   | 'collect'
   | 'scroll'
   | 'hurt'
+  | 'crumble'
   | 'checkpoint'
   | 'reveal'
   | 'complete';
@@ -20,6 +21,7 @@ const sounds: Record<SoundName, { notes: number[]; duration: number; type: Oscil
   collect: { notes: [660, 880], duration: 0.13, type: 'sine' },
   scroll: { notes: [440, 554, 659], duration: 0.28, type: 'triangle' },
   hurt: { notes: [180, 125], duration: 0.2, type: 'sawtooth' },
+  crumble: { notes: [88, 72, 58], duration: 0.24, type: 'triangle' },
   checkpoint: { notes: [330, 440, 660], duration: 0.35, type: 'sine' },
   reveal: { notes: [294, 392, 494], duration: 0.42, type: 'sine' },
   complete: { notes: [392, 523, 659, 784], duration: 0.5, type: 'triangle' },
@@ -247,7 +249,13 @@ export class AudioManager {
       if (name === 'hurt') oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.72, start + sound.duration);
       if (name === 'collect') oscillator.detune.setValueAtTime(index === 0 ? -4 : 5, start);
       gain.gain.setValueAtTime(0.0001, start);
-      const peak = name === 'hurt' ? 0.038 : name === 'step' || name === 'land' ? 0.024 : 0.058;
+      const peak = name === 'hurt'
+        ? 0.038
+        : name === 'crumble'
+          ? 0.028
+          : name === 'step' || name === 'land'
+            ? 0.024
+            : 0.058;
       gain.gain.exponentialRampToValueAtTime(peak, start + 0.012);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + sound.duration);
       oscillator.connect(gain).connect(this.getOutput(ctx));

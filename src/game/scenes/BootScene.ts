@@ -22,6 +22,10 @@ export class BootScene extends Phaser.Scene {
       frameWidth: 627,
       frameHeight: 627,
     });
+    this.load.spritesheet('galilee-landmarks', `${base}assets/art/galilee-landmarks-v1.webp`, {
+      frameWidth: 627,
+      frameHeight: 627,
+    });
 
     const loadingBar = document.querySelector<HTMLElement>('#loading-bar');
     this.load.on('progress', (progress: number) => {

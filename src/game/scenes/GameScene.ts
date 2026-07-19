@@ -22,14 +22,20 @@ interface MovingPlatform extends Phaser.Physics.Arcade.Image {
   signal: Phaser.GameObjects.Arc;
 }
 
+interface PlatformDecoration {
+  support: Phaser.GameObjects.Graphics;
+  tufts: Phaser.GameObjects.Graphics;
+  cracks?: Phaser.GameObjects.Graphics;
+}
+
 const WORLD_HEIGHT = 820;
 const GROUND_TOP = 600;
 const TOTAL_LIGHTS = 12;
 const REGION_BEATS = [
-  { x: 1460, title: 'THE OLIVE GROVE', subtitle: 'The road begins to climb' },
-  { x: 3180, title: 'THE SHEPHERD\'S RISE', subtitle: 'A high path through Galilee' },
-  { x: 4520, title: 'THE EASTERN RIDGE', subtitle: 'The water draws near' },
-  { x: 6260, title: 'THE GALILEAN SHORE', subtitle: 'Peter and Andrew wait below' },
+  { x: 1460, title: 'THE OLIVE GROVE', subtitle: 'A narrow ravine splits the road' },
+  { x: 3180, title: 'THE SHEPHERD\'S RISE', subtitle: 'The valley opens beneath the path' },
+  { x: 4520, title: 'THE EASTERN RIDGE', subtitle: 'Old terraces give way underfoot' },
+  { x: 6260, title: 'THE GALILEAN SHORE', subtitle: 'The wind carries the sound of water' },
 ] as const;
 
 export class GameScene extends Phaser.Scene {
@@ -92,6 +98,10 @@ export class GameScene extends Phaser.Scene {
   private dialogueTypingEvent?: Phaser.Time.TimerEvent;
   private dialogueFullText = '';
   private reducedMotion = false;
+  private fishermen!: Phaser.GameObjects.Image;
+  private fishingBoat!: Phaser.GameObjects.Image;
+  private callingGlow!: Phaser.GameObjects.Ellipse;
+  private rescueInProgress = false;
 
   constructor() {
     super('Game');
@@ -101,6 +111,17 @@ export class GameScene extends Phaser.Scene {
     const requested = data.level ?? 1;
     this.level = LEVELS.find((entry) => entry.id === requested && entry.playable) ?? LEVELS[0];
     this.spawnPoint.set(180, 560);
+    if (import.meta.env.DEV) {
+      const previewParams = new URLSearchParams(window.location.search);
+      const previewX = Number(previewParams.get('preview'));
+      const previewY = Number(previewParams.get('previewY'));
+      if (Number.isFinite(previewX) && previewX >= 180 && previewX <= this.goalX) {
+        this.spawnPoint.set(
+          previewX,
+          Number.isFinite(previewY) && previewY >= 120 && previewY <= 700 ? previewY : 560,
+        );
+      }
+    }
     this.virtualControls = { left: false, right: false, jump: false };
     this.collectedLights = 0;
     this.scripturesFound = [];
@@ -138,6 +159,7 @@ export class GameScene extends Phaser.Scene {
     this.lightCombo = 0;
     this.dialogueTypingEvent = undefined;
     this.dialogueFullText = '';
+    this.rescueInProgress = false;
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
@@ -156,7 +178,7 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.collider(
       this.player,
       this.ground,
-      undefined,
+      (_, platform) => this.handlePlatformContact(platform as Phaser.Physics.Arcade.Image),
       (_, platform) => this.canLandOn(platform as Phaser.Physics.Arcade.Image),
     );
     this.physics.add.collider(
@@ -200,8 +222,7 @@ export class GameScene extends Phaser.Scene {
     this.updateControlHint();
     this.updateRegionBeats();
     this.emitDust(time);
-
-    if (this.player.y > 785) this.takeDamage();
+    this.updateTraversalSafety();
   }
 
   private createBackdrop(): void {
@@ -362,6 +383,45 @@ export class GameScene extends Phaser.Scene {
         .setAlpha(alpha)
         .setDepth(depth);
     });
+
+    const landmarks = [
+      { x: 1045, frame: 0, size: 292, depth: 3, flip: false, alpha: 0.86 },
+      { x: 2460, frame: 1, size: 250, depth: 3, flip: true, alpha: 0.9 },
+      { x: 4950, frame: 2, size: 265, depth: 3, flip: false, alpha: 0.9 },
+      { x: 6980, frame: 3, size: 315, depth: 4, flip: false, alpha: 0.9 },
+    ] as const;
+    landmarks.forEach(({ x, frame, size, depth, flip, alpha }) => {
+      this.add.image(x, GROUND_TOP + 6, 'galilee-landmarks', frame)
+        .setOrigin(0.5, 0.91)
+        .setDisplaySize(size, size)
+        .setFlipX(flip)
+        .setAlpha(alpha)
+        .setDepth(depth);
+    });
+
+    [
+      { x: 1045, y: 395, text: 'A WAYSIDE WELL' },
+      { x: 2460, y: 395, text: 'THE LOWER ROAD' },
+      { x: 4950, y: 395, text: 'THE OLIVE TERRACES' },
+      { x: 6980, y: 365, text: 'FISHERMEN\'S SHORE' },
+    ].forEach(({ x, y, text }) => {
+      const rule = this.add.rectangle(x, y - 12, 44, 1, 0xf2ce7b, 0.38).setDepth(-1);
+      const label = this.add.text(x, y, text, {
+        fontFamily: FONT_BODY,
+        fontSize: '9px',
+        fontStyle: '700',
+        color: '#f0d48f',
+        letterSpacing: 2.2,
+      }).setOrigin(0.5).setAlpha(0.46).setDepth(-1);
+      this.tweens.add({
+        targets: [rule, label],
+        alpha: { from: 0.34, to: 0.58 },
+        duration: 2400,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.InOut',
+      });
+    });
   }
 
   private createWindStreaks(): void {
@@ -469,6 +529,7 @@ export class GameScene extends Phaser.Scene {
     this.lightCollectibles = this.physics.add.group({ allowGravity: false, immovable: true });
     this.scrolls = this.physics.add.group({ allowGravity: false, immovable: true });
     this.checkpoints = this.physics.add.staticGroup();
+    this.createCrossingSetpieces();
 
     [
       { x: 0, width: 1500 },
@@ -479,16 +540,17 @@ export class GameScene extends Phaser.Scene {
     ].forEach(({ x, width }) => this.addPlatform(x + width / 2, 645, width, 90));
 
     [
-      [510, 505, 230], [890, 458, 190], [1225, 410, 175],
-      [1515, 548, 118], [1656, 505, 116],
-      [1950, 500, 210], [2290, 438, 180], [2590, 520, 190],
-      [2950, 548, 145], [3110, 490, 135],
-      [3420, 495, 210], [3750, 425, 170], [4050, 520, 190],
-      [4245, 552, 126], [4400, 496, 130],
-      [4760, 505, 220], [5130, 445, 190], [5480, 510, 210], [5790, 430, 170],
-      [6030, 550, 125], [6170, 505, 112],
-      [6470, 500, 220], [6800, 438, 180],
-    ].forEach(([x, y, width]) => this.addPlatform(x, y, width, 62));
+      { x: 510, y: 505, width: 230 }, { x: 890, y: 458, width: 190 }, { x: 1225, y: 410, width: 175 },
+      { x: 1515, y: 548, width: 118 }, { x: 1656, y: 505, width: 116 },
+      { x: 1950, y: 500, width: 210 }, { x: 2290, y: 438, width: 180 }, { x: 2590, y: 520, width: 190 },
+      { x: 2950, y: 548, width: 145 }, { x: 3110, y: 490, width: 135 },
+      { x: 3420, y: 495, width: 210 }, { x: 3750, y: 425, width: 170, fragile: true },
+      { x: 4050, y: 520, width: 190, fragile: true }, { x: 4245, y: 552, width: 126 },
+      { x: 4400, y: 496, width: 130 },
+      { x: 4760, y: 505, width: 220 }, { x: 5130, y: 445, width: 190 }, { x: 5480, y: 510, width: 210 },
+      { x: 5790, y: 430, width: 170, fragile: true }, { x: 6030, y: 550, width: 125 },
+      { x: 6170, y: 505, width: 112 }, { x: 6470, y: 500, width: 220 }, { x: 6800, y: 438, width: 180 },
+    ].forEach(({ x, y, width, fragile = false }) => this.addPlatform(x, y, width, 62, fragile));
 
     this.addMovingPlatform(2710, 405, 170, 2580, 2860, 58);
     this.addMovingPlatform(4340, 393, 155, 4240, 4480, -52);
@@ -553,10 +615,10 @@ export class GameScene extends Phaser.Scene {
         .refreshBody();
     });
 
-    const callingGlow = this.add.ellipse(this.goalX + 20, GROUND_TOP - 76, 220, 240, 0xffe2a0, 0.035)
+    this.callingGlow = this.add.ellipse(this.goalX + 128, GROUND_TOP - 76, 220, 240, 0xffe2a0, 0.035)
       .setDepth(1);
     this.tweens.add({
-      targets: callingGlow,
+      targets: this.callingGlow,
       scaleX: 1.12,
       scaleY: 1.06,
       alpha: 0.065,
@@ -565,20 +627,20 @@ export class GameScene extends Phaser.Scene {
       repeat: -1,
       ease: 'Sine.InOut',
     });
-    const fishermen = this.add.image(this.goalX + 26, GROUND_TOP, 'fishermen')
+    this.fishermen = this.add.image(this.goalX + 128, GROUND_TOP, 'fishermen')
       .setOrigin(0.5, 1)
       .setDisplaySize(106, 155)
       .setDepth(10);
-    this.tweens.add({ targets: fishermen, y: GROUND_TOP - 2, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
+    this.tweens.add({ targets: this.fishermen, y: GROUND_TOP - 2, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
 
     const boatShadow = this.add.ellipse(7395, 599, 330, 35, 0x17323b, 0.2).setDepth(2);
-    const fishingBoat = this.add.image(7405, 604, 'fishing-boat')
+    this.fishingBoat = this.add.image(7405, 604, 'fishing-boat')
       .setOrigin(0.5, 1)
       .setDisplaySize(390, 215)
       .setDepth(3)
       .setAlpha(0.96);
     this.tweens.add({
-      targets: [fishingBoat, boatShadow],
+      targets: [this.fishingBoat, boatShadow],
       y: '-=2',
       duration: 2400,
       yoyo: true,
@@ -615,18 +677,85 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private addPlatform(x: number, y: number, width: number, height: number): void {
-    if (y < 620) this.decorateLedge(x, y, width, height);
+  private createCrossingSetpieces(): void {
+    const passages = [
+      { start: 1500, end: 1760, color: 0x17262b, water: false },
+      { start: 2940, end: 3220, color: 0x18323c, water: true },
+      { start: 4220, end: 4530, color: 0x18262a, water: false },
+      { start: 6000, end: 6250, color: 0x244c5d, water: true },
+    ];
+    const chasms = this.add.graphics().setDepth(0);
+    passages.forEach(({ start, end, color, water }, index) => {
+      const width = end - start;
+      const center = start + width / 2;
+      chasms.fillStyle(0x09161b, 0.5);
+      chasms.fillRect(start, GROUND_TOP + 1, width, WORLD_HEIGHT - GROUND_TOP);
+      chasms.fillStyle(color, water ? 0.72 : 0.62);
+      chasms.fillTriangle(start, GROUND_TOP, start + width * 0.43, WORLD_HEIGHT, start, WORLD_HEIGHT);
+      chasms.fillTriangle(end, GROUND_TOP, end - width * 0.42, WORLD_HEIGHT, end, WORLD_HEIGHT);
+      chasms.lineStyle(2, water ? 0x8bc0c6 : 0xb98d5f, water ? 0.28 : 0.2);
+      chasms.lineBetween(start + 8, GROUND_TOP + 2, end - 8, GROUND_TOP + 2);
+      if (water) {
+        chasms.fillStyle(index === 3 ? 0x4c91a5 : 0x386d7b, 0.62);
+        chasms.fillEllipse(center, 754, width * 1.22, 122);
+        for (let waveIndex = 0; waveIndex < 4; waveIndex += 1) {
+          const wave = this.add.ellipse(
+            center - width * 0.28 + waveIndex * width * 0.19,
+            704 + (waveIndex % 2) * 13,
+            72,
+            7,
+            0xd9f0ed,
+            0.2,
+          ).setDepth(1);
+          this.tweens.add({
+            targets: wave,
+            x: wave.x + 34,
+            scaleX: 1.35,
+            alpha: 0,
+            duration: 1450 + waveIndex * 180,
+            delay: waveIndex * 220,
+            repeat: -1,
+            repeatDelay: 480,
+            ease: 'Sine.Out',
+          });
+        }
+      } else {
+        for (let moteIndex = 0; moteIndex < 4; moteIndex += 1) {
+          const dust = this.add.image(center + (moteIndex - 1.5) * 42, 640 + moteIndex * 20, 'mote')
+            .setTint(0xb98d62)
+            .setAlpha(0.2)
+            .setScale(0.35)
+            .setDepth(1);
+          this.tweens.add({
+            targets: dust,
+            y: dust.y + 88,
+            x: dust.x + (moteIndex % 2 === 0 ? 12 : -12),
+            alpha: 0,
+            duration: 1750 + moteIndex * 210,
+            delay: moteIndex * 330,
+            repeat: -1,
+            ease: 'Sine.In',
+          });
+        }
+      }
+    });
+  }
+
+  private addPlatform(x: number, y: number, width: number, height: number, fragile = false): void {
+    const decoration = y < 620 ? this.decorateLedge(x, y, width, height, fragile) : undefined;
     const platform = this.ground.create(x, y, 'terrain') as Phaser.Physics.Arcade.Image;
     platform
       .setDisplaySize(width, height)
       .setData('oneWay', y < 620)
-      .setTint(y < 620 ? 0xf7dfb7 : 0xf1d2a7)
+      .setData('fragile', fragile)
+      .setData('fragileState', 'steady')
+      .setData('decoration', decoration)
+      .setTint(fragile ? 0xeecb96 : y < 620 ? 0xf7dfb7 : 0xf1d2a7)
       .setDepth(5)
       .refreshBody();
   }
 
-  private decorateLedge(x: number, y: number, width: number, height: number): void {
+  private decorateLedge(x: number, y: number, width: number, height: number, fragile: boolean): PlatformDecoration {
     const underside = y + height * 0.34;
     const bottom = GROUND_TOP + 3;
     const halfTop = Math.min(width * 0.37, 92);
@@ -674,6 +803,17 @@ export class GameScene extends Phaser.Scene {
         );
       }
     });
+    let cracks: Phaser.GameObjects.Graphics | undefined;
+    if (fragile) {
+      cracks = this.add.graphics().setDepth(8);
+      cracks.lineStyle(2, 0x553724, 0.6);
+      cracks.lineBetween(x - width * 0.2, y - height * 0.5 + 12, x - width * 0.08, y - height * 0.5 + 22);
+      cracks.lineBetween(x - width * 0.08, y - height * 0.5 + 22, x + width * 0.02, y - height * 0.5 + 10);
+      cracks.lineBetween(x + width * 0.18, y - height * 0.5 + 8, x + width * 0.08, y - height * 0.5 + 20);
+      cracks.fillStyle(0xe8b75c, 0.58);
+      cracks.fillCircle(x, y - height * 0.5 - 3, 2.5);
+    }
+    return { support, tufts, cracks };
   }
 
   private addMovingPlatform(x: number, y: number, width: number, min: number, max: number, velocity: number): void {
@@ -716,6 +856,83 @@ export class GameScene extends Phaser.Scene {
     const platformBody = platform.body as Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody;
     const previousBottom = playerBody.prev.y + playerBody.height;
     return playerBody.velocity.y >= 0 && previousBottom <= platformBody.top + 12;
+  }
+
+  private handlePlatformContact(platform: Phaser.Physics.Arcade.Image): void {
+    if (
+      this.isIntro
+      || this.isCinematic
+      || this.isRespawning
+      || this.dialogue
+      || !platform.getData('fragile')
+      || platform.getData('fragileState') !== 'steady'
+    ) return;
+    const playerBody = this.player.body as Phaser.Physics.Arcade.Body;
+    const platformBody = platform.body as Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody;
+    if (playerBody.velocity.y < -20 || playerBody.bottom > platformBody.top + 22) return;
+    platform.setData('fragileState', 'warning');
+    AudioManager.play('crumble');
+    const decoration = platform.getData('decoration') as PlatformDecoration | undefined;
+    this.tweens.add({
+      targets: [platform, decoration?.support, decoration?.tufts, decoration?.cracks].filter(Boolean),
+      alpha: 0.48,
+      duration: 90,
+      yoyo: true,
+      repeat: 3,
+      ease: 'Sine.InOut',
+    });
+    this.time.delayedCall(520, () => this.collapsePlatform(platform));
+  }
+
+  private collapsePlatform(platform: Phaser.Physics.Arcade.Image): void {
+    if (platform.getData('fragileState') !== 'warning') return;
+    platform.setData('fragileState', 'collapsed');
+    const decoration = platform.getData('decoration') as PlatformDecoration | undefined;
+    this.tweens.killTweensOf(platform);
+    [decoration?.support, decoration?.tufts, decoration?.cracks].forEach((part) => {
+      if (!part) return;
+      this.tweens.killTweensOf(part);
+      part.setAlpha(0);
+    });
+    const collapseX = platform.x;
+    const collapseY = platform.y;
+    const platformWidth = platform.displayWidth;
+    platform.disableBody(true, true);
+    if (!this.reducedMotion) this.cameras.main.shake(95, 0.0022);
+    for (let index = 0; index < 9; index += 1) {
+      const debris = this.add.image(
+        collapseX + Phaser.Math.Between(-Math.floor(platformWidth * 0.42), Math.floor(platformWidth * 0.42)),
+        collapseY - 18 + Phaser.Math.Between(-7, 7),
+        'mote',
+      )
+        .setTint(index % 2 === 0 ? 0x9c724b : 0xd1a36c)
+        .setAlpha(0.74)
+        .setScale(Phaser.Math.FloatBetween(0.35, 0.76))
+        .setDepth(14);
+      this.tweens.add({
+        targets: debris,
+        x: debris.x + Phaser.Math.Between(-26, 26),
+        y: debris.y + Phaser.Math.Between(70, 145),
+        angle: Phaser.Math.Between(-80, 80),
+        alpha: 0,
+        duration: Phaser.Math.Between(560, 920),
+        ease: 'Quad.In',
+        onComplete: () => debris.destroy(),
+      });
+    }
+    this.time.delayedCall(2600, () => {
+      if (this.isComplete) return;
+      platform.enableBody(true, collapseX, collapseY, true, true);
+      platform.refreshBody();
+      platform.setAlpha(0).setTint(0xeecb96).setData('fragileState', 'steady');
+      [decoration?.support, decoration?.tufts, decoration?.cracks].forEach((part) => part?.setAlpha(0));
+      this.tweens.add({
+        targets: [platform, decoration?.support, decoration?.tufts, decoration?.cracks].filter(Boolean),
+        alpha: 1,
+        duration: 360,
+        ease: 'Sine.Out',
+      });
+    });
   }
 
   private addLight(x: number, y: number, index: number): void {
@@ -811,7 +1028,7 @@ export class GameScene extends Phaser.Scene {
     this.progressMarker = this.add.circle(410, 48, 5, 0xffe7a2, 1)
       .setStrokeStyle(2, COLORS.deep, 0.72);
     const regionDots = REGION_BEATS.map((beat) => this.add.circle(
-      410 + 440 * (beat.x / this.level.worldWidth),
+      410 + 440 * (beat.x / this.goalX),
       48,
       2.5,
       0xe8b75c,
@@ -1164,7 +1381,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateHUD(): void {
-    const progress = Phaser.Math.Clamp(this.player.x / this.level.worldWidth, 0, 1);
+    const progress = Phaser.Math.Clamp(this.player.x / this.goalX, 0, 1);
     this.progressFill.setDisplaySize(Math.max(4, 440 * progress), 4);
     this.progressMarker.setX(410 + 440 * progress);
     this.atmosphereTint.setAlpha(Phaser.Math.Clamp((progress - 0.68) * 0.15, 0, 0.045));
@@ -1303,6 +1520,15 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: dust, x: dust.x - this.player.getFacing() * 18, y: dust.y - 12, alpha: 0, scale: 1.1, duration: 430, onComplete: () => dust.destroy() });
   }
 
+  private updateTraversalSafety(): void {
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    const grounded = body.blocked.down || body.touching.down;
+    if (grounded && this.player.y < 680) this.rescueInProgress = false;
+    if (this.player.y < 748 || this.rescueInProgress) return;
+    this.rescueInProgress = true;
+    this.takeDamage();
+  }
+
   private attemptInteract(): void {
     if (this.dialogue) {
       if (this.time.now > this.interactionLockUntil) this.advanceDialogue();
@@ -1321,7 +1547,8 @@ export class GameScene extends Phaser.Scene {
     this.goalSequenceStarted = true;
     this.isCinematic = true;
     this.player.setControlEnabled(false);
-    this.player.setFrozen(true);
+    this.player.setFrozen(true, true);
+    this.player.face(1);
     this.touchControls?.setVisible(false);
     this.controlHint?.destroy(true);
     this.controlHint = undefined;
@@ -1329,6 +1556,10 @@ export class GameScene extends Phaser.Scene {
     this.regionTween = undefined;
     this.regionCard?.destroy(true);
     this.regionCard = undefined;
+    this.toastTween?.stop();
+    this.toastTween = undefined;
+    this.activeToast?.destroy(true);
+    this.activeToast = undefined;
     this.goalPrompt.setVisible(false);
     this.tweens.add({ targets: this.hud, alpha: 0, duration: 280, ease: 'Sine.In' });
 
@@ -1343,12 +1574,71 @@ export class GameScene extends Phaser.Scene {
     AudioManager.play('reveal');
     this.cameras.main.stopFollow();
     this.cameras.main.pan(this.goalX + 92, 360, 720, 'Sine.easeInOut');
+    this.tweens.add({
+      targets: this.player,
+      x: this.goalX - 76,
+      duration: 620,
+      ease: 'Sine.InOut',
+      onUpdate: () => this.player.syncVisual(),
+    });
+    this.tweens.add({
+      targets: this.callingGlow,
+      alpha: 0.14,
+      scaleX: 1.24,
+      scaleY: 1.12,
+      duration: 760,
+      ease: 'Sine.Out',
+    });
     this.time.delayedCall(680, () => {
       this.startDialogue([
         { speaker: 'PETER', text: 'The nets are ready, Andrew. The lake has been generous this morning.' },
         { speaker: 'JESUS', text: 'Come, follow me, and I will send you out to fish for people.' },
         { speaker: 'NARRATOR', text: 'At once they left their nets and followed him.' },
-      ], () => this.completeLevel());
+      ], () => this.finishGoalSequence());
+    });
+  }
+
+  private finishGoalSequence(): void {
+    AudioManager.play('reveal');
+    if (!this.reducedMotion) this.cameras.main.flash(420, 255, 226, 160, false);
+    const response = this.add.text(640, 162, 'AT ONCE THEY LEFT THEIR NETS  ·  MATTHEW 4:20', {
+      fontFamily: FONT_BODY,
+      fontSize: '11px',
+      fontStyle: '700',
+      color: '#ffe7a2',
+      letterSpacing: 2.5,
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2200).setAlpha(0);
+    this.tweens.add({
+      targets: response,
+      y: 154,
+      alpha: 1,
+      duration: 360,
+      hold: 720,
+      yoyo: true,
+      ease: 'Sine.InOut',
+    });
+    this.tweens.add({
+      targets: this.fishermen,
+      x: this.fishermen.x - 24,
+      duration: 900,
+      ease: 'Sine.InOut',
+    });
+    const answer = this.add.particles(this.goalX + 46, GROUND_TOP - 78, 'mote', {
+      lifespan: { min: 720, max: 1250 },
+      speed: { min: 12, max: 48 },
+      angle: { min: 205, max: 335 },
+      scale: { start: 0.58, end: 0 },
+      alpha: { start: 0.72, end: 0 },
+      quantity: 18,
+      emitting: false,
+      tint: [0xffe3a0, 0xe8b75c, 0xfff4d6],
+      blendMode: Phaser.BlendModes.ADD,
+    }).setDepth(70);
+    answer.explode(18);
+    this.time.delayedCall(1250, () => {
+      response.destroy();
+      answer.destroy();
+      this.completeLevel();
     });
   }
 
