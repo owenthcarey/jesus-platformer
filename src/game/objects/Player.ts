@@ -23,15 +23,21 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private lastFootstepAt = 0;
   private landingCompression = 0;
   private takeoffStretch = 0;
+  private landingPoseUntil = 0;
+  private takeoffPoseUntil = 0;
+  private currentPresentationFrame = -1;
+  private lastStrideFrameAt = 0;
+  private strideFrame = 1;
   private gamepadJumpWasDown = false;
-  private readonly baseScale = 0.137;
+  private readonly physicsScale = 0.137;
+  private readonly visualScale = 0.245;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     super(scene, x, y, 'jesus');
     scene.add.existing(this);
     scene.physics.add.existing(this);
     this.setOrigin(0.5, 1);
-    this.setScale(this.baseScale);
+    this.setScale(this.physicsScale);
     this.setDepth(19).setAlpha(0);
     this.setMaxVelocity(315, 760);
     this.setDragX(1750);
@@ -42,12 +48,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     body.setOffset(140, 136);
 
     // Keep the physics body completely stable while animating a separate
-    // painted layer. This gives the single hero illustration a convincing
-    // run, jump, and landing silhouette without compromising collision feel.
+    // painted presentation layer. Pose changes never compromise collision
+    // feel or move the hero's gameplay footprint.
     this.shadow = scene.add.ellipse(x, y + 2, 38, 10, 0x0b1b22, 0.24).setDepth(18);
-    this.visual = scene.add.image(x, y, 'jesus')
+    this.visual = scene.add.image(x, y + 28, 'jesus-movement', 0)
       .setOrigin(0.5, 1)
-      .setScale(this.baseScale)
+      .setScale(this.visualScale)
       .setDepth(20);
 
     this.cursors = scene.input.keyboard!.createCursorKeys();
@@ -125,6 +131,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
         this.jumpQueuedAt = -1000;
         this.lastGroundedAt = -1000;
         this.takeoffStretch = 1;
+        this.takeoffPoseUntil = time + 125;
         AudioManager.play('jump');
       }
 
@@ -140,6 +147,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       AudioManager.play('land');
       this.landedThisFrame = true;
       this.landingCompression = Phaser.Math.Clamp(Math.abs(this.previousVelocityY) / 680, 0.38, 1);
+      this.landingPoseUntil = time + 155;
     }
     this.wasGrounded = grounded;
 
@@ -159,17 +167,36 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const stride = moving ? Math.sin(time * (0.014 + speedRatio * 0.008)) : 0;
     const airStretch = grounded ? 0 : Phaser.Math.Clamp(-body.velocity.y / 900, -0.45, 0.55);
 
+    let frame = 0;
+    if (!grounded) {
+      frame = time < this.takeoffPoseUntil ? 3 : 4;
+    } else if (time < this.landingPoseUntil) {
+      frame = 5;
+    } else if (speedRatio > 0.72) {
+      if (time - this.lastStrideFrameAt > 155 - speedRatio * 28) {
+        this.lastStrideFrameAt = time;
+        this.strideFrame = this.strideFrame === 1 ? 2 : 1;
+      }
+      frame = this.strideFrame;
+    } else if (speedRatio > 0.1) {
+      frame = 1;
+    }
+    if (frame !== this.currentPresentationFrame) {
+      this.currentPresentationFrame = frame;
+      this.visual.setFrame(frame);
+    }
+
     this.landingCompression = Phaser.Math.Linear(this.landingCompression, 0, 0.17);
     this.takeoffStretch = Phaser.Math.Linear(this.takeoffStretch, 0, 0.14);
 
-    const targetScaleX = this.baseScale * (
+    const targetScaleX = this.visualScale * (
       1
       + this.landingCompression * 0.075
       - this.takeoffStretch * 0.035
       - airStretch * 0.018
       + Math.abs(stride) * 0.006
     );
-    const targetScaleY = this.baseScale * (
+    const targetScaleY = this.visualScale * (
       1
       - this.landingCompression * 0.095
       + this.takeoffStretch * 0.06
@@ -180,8 +207,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       ? body.velocity.x * 0.00005 + stride * 0.006 * this.facing
       : Phaser.Math.Clamp(body.velocity.x * 0.00012, -0.045, 0.045);
 
+    const poseOffset = [4, 6, 5, 10, 13, 11][frame] * this.facing;
     this.visual
-      .setPosition(this.x, this.y + (moving ? stride * 1.15 : Math.sin(time * 0.0024) * 0.45))
+      .setPosition(
+        this.x + poseOffset,
+        this.y + 28 + (moving ? stride * 0.7 : Math.sin(time * 0.0024) * 0.35),
+      )
       .setFlipX(this.facing < 0)
       .setRotation(Phaser.Math.Linear(this.visual.rotation, targetLean, 0.14))
       .setScale(
@@ -211,7 +242,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   syncVisual(): void {
-    this.visual.setPosition(this.x, this.y);
+    this.visual.setPosition(this.x, this.y + 28);
     this.shadow.setPosition(this.x, this.y + 2);
   }
 
@@ -226,8 +257,16 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   flashDamage(): void {
     this.visual.setTint(0xffb09a);
-    this.scene.time.delayedCall(170, () => {
-      if (this.visual.active) this.visual.clearTint();
+    this.scene.tweens.add({
+      targets: this.visual,
+      alpha: 0.28,
+      duration: 75,
+      yoyo: true,
+      repeat: 5,
+      onComplete: () => {
+        if (!this.visual.active) return;
+        this.visual.clearTint().setAlpha(1);
+      },
     });
   }
 }

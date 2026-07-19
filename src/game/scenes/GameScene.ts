@@ -205,9 +205,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createBackdrop(): void {
+    // The oversized background moves just enough to make the long journey
+    // feel spatial without exposing its edges or fighting the painted vista.
     this.add.image(640, 360, 'galilee')
-      .setDisplaySize(1280, 720)
-      .setScrollFactor(0)
+      .setDisplaySize(1540, 720)
+      .setScrollFactor(0.018)
       .setDepth(-100);
     this.add.rectangle(640, 360, 1280, 720, 0x102733, 0.08)
       .setScrollFactor(0)
@@ -614,17 +616,64 @@ export class GameScene extends Phaser.Scene {
   }
 
   private addPlatform(x: number, y: number, width: number, height: number): void {
-    const segments = Math.max(1, Math.ceil(width / 510));
-    const segmentWidth = width / segments;
-    const startX = x - width / 2;
-    for (let index = 0; index < segments; index += 1) {
-      const platform = this.ground.create(startX + segmentWidth * (index + 0.5), y, 'terrain') as Phaser.Physics.Arcade.Image;
-      platform
-        .setDisplaySize(segmentWidth + (segments > 1 ? 56 : 0), height)
-        .setData('oneWay', y < 620)
-        .setDepth(5)
-        .refreshBody();
-    }
+    if (y < 620) this.decorateLedge(x, y, width, height);
+    const platform = this.ground.create(x, y, 'terrain') as Phaser.Physics.Arcade.Image;
+    platform
+      .setDisplaySize(width, height)
+      .setData('oneWay', y < 620)
+      .setTint(y < 620 ? 0xf7dfb7 : 0xf1d2a7)
+      .setDepth(5)
+      .refreshBody();
+  }
+
+  private decorateLedge(x: number, y: number, width: number, height: number): void {
+    const underside = y + height * 0.34;
+    const bottom = GROUND_TOP + 3;
+    const halfTop = Math.min(width * 0.37, 92);
+    const halfBottom = Math.min(width * 0.18, 46);
+    const support = this.add.graphics().setDepth(4);
+
+    // Tapered, irregular stonework grounds the painted platform top in the
+    // hillside. It reads as an old Galilean terrace instead of a floating UI
+    // slab while leaving the collision silhouette completely predictable.
+    support.fillStyle(0x4b3324, 0.46);
+    support.fillPoints([
+      new Phaser.Geom.Point(x - halfTop, underside - 7),
+      new Phaser.Geom.Point(x + halfTop, underside - 7),
+      new Phaser.Geom.Point(x + halfTop * 0.82, underside + (bottom - underside) * 0.28),
+      new Phaser.Geom.Point(x + halfBottom * 1.08, underside + (bottom - underside) * 0.58),
+      new Phaser.Geom.Point(x + halfBottom, bottom),
+      new Phaser.Geom.Point(x - halfBottom, bottom),
+      new Phaser.Geom.Point(x - halfBottom * 1.12, underside + (bottom - underside) * 0.63),
+      new Phaser.Geom.Point(x - halfTop * 0.78, underside + (bottom - underside) * 0.3),
+    ], true);
+    support.fillStyle(0xa47649, 0.29);
+    support.fillTriangle(
+      x - halfTop * 0.72,
+      underside,
+      x + halfTop * 0.5,
+      underside,
+      x - halfBottom * 0.25,
+      bottom,
+    );
+    support.lineStyle(2, 0x2b211c, 0.22);
+    support.lineBetween(x - halfTop * 0.48, underside + 8, x - halfBottom * 0.18, bottom - 5);
+    support.lineBetween(x + halfTop * 0.28, underside + 7, x + halfBottom * 0.34, bottom - 6);
+
+    const tufts = this.add.graphics().setDepth(7);
+    tufts.lineStyle(1.5, 0x6b6b3b, 0.58);
+    [-0.34, 0.27].forEach((position, index) => {
+      const tuftX = x + width * position;
+      const tuftY = y - height * 0.5 + 4;
+      for (let blade = -2; blade <= 2; blade += 1) {
+        tufts.lineBetween(
+          tuftX + blade * 2.5,
+          tuftY,
+          tuftX + blade * 4,
+          tuftY - 8 - Math.abs(blade - index),
+        );
+      }
+    });
   }
 
   private addMovingPlatform(x: number, y: number, width: number, min: number, max: number, velocity: number): void {
@@ -650,6 +699,7 @@ export class GameScene extends Phaser.Scene {
     platform
       .setDisplaySize(width, 56)
       .setData('oneWay', true)
+      .setTint(0xf6dcaf)
       .setDepth(6)
       .setVelocityX(velocity)
       .setImmovable(true);
@@ -1432,15 +1482,21 @@ export class GameScene extends Phaser.Scene {
         if (source.active) source.clearTint();
       });
     }
-    if (this.health <= 0) {
+    const courageDepleted = this.health <= 0;
+    if (courageDepleted) {
       this.health = 3;
       this.showToast('TAKE COURAGE', 'The road continues from your last rest');
     }
     this.updateCourageHUD();
-    if (source) {
+    if (source && !courageDepleted) {
       this.player.setControlEnabled(false);
-      this.player.setVelocity(-this.player.getFacing() * 215, -285);
-      this.time.delayedCall(170, () => this.respawn(true));
+      const knockbackDirection = this.player.x < source.x ? -1 : 1;
+      this.player.setVelocity(knockbackDirection * 255, -315);
+      this.time.delayedCall(280, () => {
+        if (!this.isRespawning && !this.isComplete && !this.dialogue) {
+          this.player.setControlEnabled(true);
+        }
+      });
     } else {
       this.respawn(true);
     }

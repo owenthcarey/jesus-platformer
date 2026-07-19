@@ -9,6 +9,10 @@ export class BootScene extends Phaser.Scene {
     const base = import.meta.env.BASE_URL;
     this.load.image('galilee', `${base}assets/art/galilee-morning.png`);
     this.load.image('jesus', `${base}assets/art/jesus-hero.png`);
+    this.load.spritesheet('jesus-movement', `${base}assets/art/jesus-movement-v2.png`, {
+      frameWidth: 358,
+      frameHeight: 732,
+    });
     this.load.image('terrain', `${base}assets/art/galilee-platform.png`);
     this.load.image('brambles', `${base}assets/art/galilee-brambles.png`);
     this.load.image('olive-tree', `${base}assets/art/galilee-olive-v2.png`);

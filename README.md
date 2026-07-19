@@ -28,4 +28,4 @@ Level metadata lives in `src/game/data/levels.ts`. Progress, best times, ratings
 
 ## Artwork
 
-The Galilee background, Jesus character, hand-painted terrain, brambles, olive tree, and Peter-and-Andrew character group were generated specifically for this project and processed locally for game use. Atmospheric effects, collectibles, checkpoints, shoreline details, and UI are rendered in Phaser.
+The Galilee background, six-pose Jesus movement sheet, hand-painted terrain, brambles, olive tree, and Peter-and-Andrew character group were generated specifically for this project and processed locally for game use. Atmospheric effects, collectibles, checkpoints, shoreline details, and UI are rendered in Phaser.

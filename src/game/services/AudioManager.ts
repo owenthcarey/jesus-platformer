@@ -33,6 +33,9 @@ export class AudioManager {
   private static ambienceGain?: GainNode;
   private static ambienceSecondaryGain?: GainNode;
   private static ambienceLfo?: OscillatorNode;
+  private static musicBus?: GainNode;
+  private static musicTimer?: number;
+  private static musicStep = 0;
   private static outputGain?: GainNode;
   private static compressor?: DynamicsCompressorNode;
   private static noiseBuffer?: AudioBuffer;
@@ -43,8 +46,16 @@ export class AudioManager {
       this.context = new AudioContext();
       this.prepareOutput(this.context);
     }
-    if (this.context.state === 'suspended') void this.context.resume();
-    if (this.ambienceRequested) this.startAmbience();
+    const startRequestedAudio = (): void => {
+      if (!this.ambienceRequested) return;
+      this.startAmbience();
+      this.startScore();
+    };
+    if (this.context.state === 'suspended') {
+      void this.context.resume().then(startRequestedAudio).catch(() => undefined);
+    } else {
+      startRequestedAudio();
+    }
   }
 
   static isEnabled(): boolean {
@@ -147,10 +158,73 @@ export class AudioManager {
     const source = this.ambienceSource;
     if (source && this.context) source.stop(this.context.currentTime + 0.2);
     if (this.ambienceLfo && this.context) this.ambienceLfo.stop(this.context.currentTime + 0.2);
+    if (this.musicTimer !== undefined) window.clearInterval(this.musicTimer);
+    if (this.musicBus && this.context) {
+      const now = this.context.currentTime;
+      this.musicBus.gain.cancelScheduledValues(now);
+      this.musicBus.gain.setValueAtTime(Math.max(0.0001, this.musicBus.gain.value), now);
+      this.musicBus.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    }
     this.ambienceSource = undefined;
     this.ambienceGain = undefined;
     this.ambienceSecondaryGain = undefined;
     this.ambienceLfo = undefined;
+    this.musicBus = undefined;
+    this.musicTimer = undefined;
+    this.musicStep = 0;
+  }
+
+  private static startScore(): void {
+    const ctx = this.context;
+    if (!ctx || ctx.state !== 'running' || this.musicTimer !== undefined || !this.enabled) return;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, ctx.currentTime);
+    bus.gain.exponentialRampToValueAtTime(0.72, ctx.currentTime + 1.8);
+    bus.connect(this.getOutput(ctx));
+    this.musicBus = bus;
+    this.scheduleJourneyPhrase();
+    this.musicTimer = window.setInterval(() => this.scheduleJourneyPhrase(), 3400);
+  }
+
+  private static scheduleJourneyPhrase(): void {
+    const ctx = this.context;
+    const bus = this.musicBus;
+    if (!ctx || !bus || ctx.state !== 'running' || !this.enabled || !this.ambienceRequested) return;
+    const inlandChords = [
+      [220, 277.18, 329.63],
+      [196, 246.94, 329.63],
+      [174.61, 220, 293.66],
+      [196, 261.63, 329.63],
+    ];
+    const shoreChords = [
+      [220, 293.66, 392],
+      [246.94, 329.63, 440],
+      [196, 293.66, 392],
+      [220, 329.63, 440],
+    ];
+    const chords = this.journeyProgress > 0.68 ? shoreChords : inlandChords;
+    const chord = chords[this.musicStep % chords.length];
+    this.musicStep += 1;
+    const now = ctx.currentTime + 0.04;
+
+    chord.forEach((frequency, index) => {
+      const start = now + index * 0.46;
+      const oscillator = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+      oscillator.type = index === 0 ? 'sine' : 'triangle';
+      oscillator.frequency.value = frequency;
+      oscillator.detune.value = index === 1 ? -3 : index === 2 ? 4 : 0;
+      filter.type = 'lowpass';
+      filter.frequency.value = 920;
+      filter.Q.value = 0.3;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(index === 0 ? 0.008 : 0.006, start + 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 2.5);
+      oscillator.connect(filter).connect(gain).connect(bus);
+      oscillator.start(start);
+      oscillator.stop(start + 2.6);
+    });
   }
 
   static play(name: SoundName): void {
